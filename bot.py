@@ -2,6 +2,7 @@ import os
 import json
 import logging
 from datetime import datetime, timedelta
+from calendar import monthrange
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -20,12 +21,10 @@ DATA_FILE = "data.json"
     ADD_CLIENT_PAYMENT, ADD_CLIENT_RECEIPT,
     ADD_SUB_PACKAGE, ADD_SUB_PAYMENT, ADD_SUB_RECEIPT,
     ADD_EXPENSE_AMOUNT, ADD_EXPENSE_CATEGORY,
-    EDIT_SCHEDULE_ACTION, EDIT_SCHEDULE_DAY, EDIT_SCHEDULE_TIME,
-    SEARCH_CLIENT, FILL_NEW_CLIENT_NAME, FILL_NEW_CLIENT_PACKAGE,
-    FILL_NEW_CLIENT_PAYMENT, FILL_NEW_CLIENT_RECEIPT,
-    PERIOD_FROM, PERIOD_TO,
     TAKE_PAYMENT_PACKAGE, TAKE_PAYMENT_METHOD, TAKE_PAYMENT_RECEIPT,
-) = range(23)
+    EDIT_CLIENT_FIELD, EDIT_CLIENT_VALUE,
+    EDIT_SUB_FIELD, EDIT_SUB_VALUE,
+) = range(17)
 
 PACKAGES = {
     "1": {"name": "Разовое занятие", "sessions": 1, "price": 30},
@@ -35,6 +34,9 @@ PACKAGES = {
 
 SIGNUP_KEYWORDS = ["я буду", "приду", "запиши", "запишите", "хочу прийти", "оставь место", "буду", "иду", "+", "забронь"]
 CANCEL_KEYWORDS = ["не буду", "не приду", "не смогу", "отменяю", "не пойду"]
+DAY_NAMES = {"tuesday": "Вторник", "thursday": "Четверг"}
+DAY_TIMES = {"tuesday": "18:00", "thursday": "17:00"}
+DAY_WEEKDAYS = {"tuesday": 1, "thursday": 3}
 
 def load():
     if os.path.exists(DATA_FILE):
@@ -60,6 +62,21 @@ def is_admin(uid):
 def today_str():
     return datetime.now().strftime("%d.%m.%Y")
 
+def get_week_monday(dt=None):
+    if dt is None:
+        dt = datetime.now()
+    monday = dt - timedelta(days=dt.weekday())
+    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+
+def get_training_date(day_key, week_monday=None):
+    if week_monday is None:
+        week_monday = get_week_monday()
+    offset = DAY_WEEKDAYS[day_key]
+    return (week_monday + timedelta(days=offset)).strftime("%d.%m.%Y")
+
+def current_week_key():
+    return get_week_monday().strftime("%d.%m.%Y")
+
 def get_active_sub(client):
     for sub in reversed(client.get("subscriptions", [])):
         if sub["sessions_left"] > 0:
@@ -71,7 +88,7 @@ def get_active_sub(client):
                 return sub
     return None
 
-def client_status(client):
+def client_status_icon(client):
     sub = get_active_sub(client)
     if not sub:
         return "🔴"
@@ -86,24 +103,15 @@ def next_training_day():
     now = datetime.now()
     weekday = now.weekday()
     if weekday < 1:
-        days = 1 - weekday
-    elif weekday == 1:
-        days = 0 if now.hour < 18 else 2
-    elif weekday < 3:
-        days = 3 - weekday
-    elif weekday == 3:
-        days = 0 if now.hour < 17 else 5
-    else:
-        days = 7 - weekday + 1
-    target = now + timedelta(days=days)
-    if target.weekday() == 1:
         return "tuesday"
-    return "thursday"
-
-def _current_week_key():
-    now = datetime.now()
-    monday = now - timedelta(days=now.weekday())
-    return monday.strftime("%d.%m.%Y")
+    elif weekday == 1:
+        return "tuesday" if now.hour < 18 else "thursday"
+    elif weekday < 3:
+        return "thursday"
+    elif weekday == 3:
+        return "thursday" if now.hour < 17 else "tuesday"
+    else:
+        return "tuesday"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -126,7 +134,7 @@ async def show_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load()
     active, inactive = [], []
     for uname, c in data["clients"].items():
-        st = client_status(c)
+        st = client_status_icon(c)
         if st == "🔴":
             inactive.append((uname, c, st))
         else:
@@ -151,7 +159,7 @@ async def view_client(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not c:
         await query.edit_message_text("Клиент не найден.")
         return
-    st = client_status(c)
+    st = client_status_icon(c)
     sub = get_active_sub(c)
     text = f"{st} *{c['name']}* (@{uname})\n\n"
     if sub:
@@ -159,18 +167,145 @@ async def view_client(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"Осталось занятий: {sub['sessions_left']}/{sub['sessions_total']}\n"
         if sub.get("end_date"):
             text += f"Действует до: {sub['end_date']}\n"
-        text += "\n"
+        pay = "💵 Наличные" if sub["payment"] == "cash" else "💳 Перевод"
+        text += f"Оплата: {pay}\n\n"
     if c.get("subscriptions"):
         text += "*История абонементов:*\n"
         for i, s in enumerate(reversed(c["subscriptions"]), 1):
-            pay = "💵 Наличные" if s["payment"] == "cash" else "💳 Перевод"
-            status = "✅ активен" if s["sessions_left"] > 0 else "☑️ закрыт"
-            text += f"{i}. {s['package_name']} — {s.get('start_date','—')} {pay} {status}\n"
+            pay = "💵" if s["payment"] == "cash" else "💳"
+            status = "✅" if s["sessions_left"] > 0 else "☑️"
+            text += f"{i}. {s['package_name']} {pay} {status} — {s.get('start_date','—')}\n"
     kb = [
         [InlineKeyboardButton("➕ Добавить абонемент", callback_data=f"addsub_{uname}")],
+        [InlineKeyboardButton("✏️ Редактировать данные", callback_data=f"edit_client_{uname}")],
         [InlineKeyboardButton("◀️ Назад", callback_data="menu_clients")],
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def edit_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uname = query.data.replace("edit_client_", "")
+    context.user_data["edit_uname"] = uname
+    data = load()
+    c = data["clients"].get(uname)
+    sub = get_active_sub(c)
+    kb = [
+        [InlineKeyboardButton("👤 Изменить имя", callback_data="editfield_name")],
+        [InlineKeyboardButton("📱 Изменить ник", callback_data="editfield_username")],
+    ]
+    if sub:
+        kb.append([InlineKeyboardButton("🎫 Тип абонемента", callback_data="editfield_package")])
+        kb.append([InlineKeyboardButton("🔢 Кол-во занятий", callback_data="editfield_sessions")])
+        kb.append([InlineKeyboardButton("📅 Дата окончания", callback_data="editfield_enddate")])
+        kb.append([InlineKeyboardButton("💳 Способ оплаты", callback_data="editfield_payment")])
+    kb.append([InlineKeyboardButton("◀️ Назад", callback_data=f"client_view_{uname}")])
+    await query.edit_message_text(
+        f"✏️ *Редактировать клиента*\n@{uname}\n\nЧто изменить?",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode="Markdown"
+    )
+
+async def edit_field_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    field = query.data.replace("editfield_", "")
+    context.user_data["edit_field"] = field
+    uname = context.user_data["edit_uname"]
+    if field == "package":
+        kb = [
+            [InlineKeyboardButton("1️⃣ Разовое — 30₾", callback_data="editval_pkg_1")],
+            [InlineKeyboardButton("4️⃣ Абонемент 4 зан. — 110₾", callback_data="editval_pkg_4")],
+            [InlineKeyboardButton("8️⃣ Абонемент 8 зан. — 220₾", callback_data="editval_pkg_8")],
+        ]
+        await query.edit_message_text("Выбери новый тип абонемента:", reply_markup=InlineKeyboardMarkup(kb))
+        return EDIT_SUB_FIELD
+    elif field == "payment":
+        kb = [
+            [InlineKeyboardButton("💵 Наличные", callback_data="editval_pay_cash")],
+            [InlineKeyboardButton("💳 Перевод", callback_data="editval_pay_transfer")],
+        ]
+        await query.edit_message_text("Выбери способ оплаты:", reply_markup=InlineKeyboardMarkup(kb))
+        return EDIT_SUB_FIELD
+    elif field == "name":
+        await query.edit_message_text("Введи новое *имя* клиента:", parse_mode="Markdown")
+        return EDIT_CLIENT_VALUE
+    elif field == "username":
+        await query.edit_message_text("Введи новый *ник* (без @):", parse_mode="Markdown")
+        return EDIT_CLIENT_VALUE
+    elif field == "sessions":
+        await query.edit_message_text("Введи новое *количество оставшихся занятий*:", parse_mode="Markdown")
+        return EDIT_CLIENT_VALUE
+    elif field == "enddate":
+        await query.edit_message_text("Введи новую *дату окончания* (формат: 31.12.2025):", parse_mode="Markdown")
+        return EDIT_CLIENT_VALUE
+
+async def edit_client_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    field = context.user_data["edit_field"]
+    uname = context.user_data["edit_uname"]
+    value = update.message.text.strip()
+    data = load()
+    c = data["clients"].get(uname)
+    if field == "name":
+        data["clients"][uname]["name"] = value
+    elif field == "username":
+        new_uname = value.replace("@", "")
+        data["clients"][new_uname] = data["clients"].pop(uname)
+        data["clients"][new_uname]["username"] = new_uname
+        uname = new_uname
+        context.user_data["edit_uname"] = uname
+    elif field == "sessions":
+        try:
+            sessions = int(value)
+            sub = get_active_sub(c)
+            if sub:
+                idx = next(i for i, s in enumerate(c["subscriptions"]) if s is sub)
+                data["clients"][uname]["subscriptions"][idx]["sessions_left"] = sessions
+        except ValueError:
+            await update.message.reply_text("Введи число!")
+            return EDIT_CLIENT_VALUE
+    elif field == "enddate":
+        try:
+            datetime.strptime(value, "%d.%m.%Y")
+            sub = get_active_sub(c)
+            if sub:
+                idx = next(i for i, s in enumerate(c["subscriptions"]) if s is sub)
+                data["clients"][uname]["subscriptions"][idx]["end_date"] = value
+        except ValueError:
+            await update.message.reply_text("Формат: 31.12.2025")
+            return EDIT_CLIENT_VALUE
+    save(data)
+    kb = [[InlineKeyboardButton("◀️ К клиенту", callback_data=f"client_view_{uname}")]]
+    await update.message.reply_text("✅ Данные обновлены!", reply_markup=InlineKeyboardMarkup(kb))
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def edit_sub_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uname = context.user_data["edit_uname"]
+    data = load()
+    c = data["clients"].get(uname)
+    sub = get_active_sub(c)
+    if not sub:
+        await query.edit_message_text("Активный абонемент не найден.")
+        return ConversationHandler.END
+    idx = next(i for i, s in enumerate(c["subscriptions"]) if s is sub)
+    if query.data.startswith("editval_pkg_"):
+        pkg_key = query.data.replace("editval_pkg_", "")
+        pkg = PACKAGES[pkg_key]
+        data["clients"][uname]["subscriptions"][idx]["package_key"] = pkg_key
+        data["clients"][uname]["subscriptions"][idx]["package_name"] = pkg["name"]
+        data["clients"][uname]["subscriptions"][idx]["sessions_total"] = pkg["sessions"]
+        data["clients"][uname]["subscriptions"][idx]["price"] = pkg["price"]
+    elif query.data.startswith("editval_pay_"):
+        pay = query.data.replace("editval_pay_", "")
+        data["clients"][uname]["subscriptions"][idx]["payment"] = pay
+    save(data)
+    kb = [[InlineKeyboardButton("◀️ К клиенту", callback_data=f"client_view_{uname}")]]
+    await query.edit_message_text("✅ Данные обновлены!", reply_markup=InlineKeyboardMarkup(kb))
+    context.user_data.clear()
+    return ConversationHandler.END
 
 async def add_client_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -259,13 +394,13 @@ async def save_new_client(msg_or_query, context):
         }
     if context.user_data.get("from_training") and context.user_data.get("training_day"):
         day = context.user_data["training_day"]
-        week_key = _current_week_key()
+        wk = current_week_key()
         if day not in data["schedule"]:
-            data["schedule"][day] = {"time": "18:00", "signups": {}}
-        if week_key not in data["schedule"][day].get("signups", {}):
-            data["schedule"][day]["signups"][week_key] = {}
-        if uname not in data["schedule"][day]["signups"][week_key]:
-            data["schedule"][day]["signups"][week_key][uname] = {"status": "signed"}
+            data["schedule"][day] = {"time": DAY_TIMES[day], "signups": {}}
+        if wk not in data["schedule"][day].get("signups", {}):
+            data["schedule"][day]["signups"][wk] = {}
+        if uname not in data["schedule"][day]["signups"][wk]:
+            data["schedule"][day]["signups"][wk][uname] = {"status": "signed"}
     save(data)
     text = f"✅ Клиент *{data['clients'][uname]['name']}* (@{uname}) добавлен!"
     kb = [[InlineKeyboardButton("◀️ К клиентам", callback_data="menu_clients"),
@@ -348,21 +483,20 @@ async def save_subscription(msg_or_query, context):
     context.user_data.clear()
     return ConversationHandler.END
 
-DAY_NAMES = {"tuesday": "Вторник", "thursday": "Четверг"}
-
 async def show_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = load()
+    wk = current_week_key()
     kb = []
     for day_key, day_name in DAY_NAMES.items():
         if day_key in data["schedule"]:
             time = data["schedule"][day_key]["time"]
-            week_key = _current_week_key()
-            signups = data["schedule"][day_key].get("signups", {}).get(week_key, {})
+            signups = data["schedule"][day_key].get("signups", {}).get(wk, {})
             count = len(signups)
+            date = get_training_date(day_key)
             kb.append([InlineKeyboardButton(
-                f"📅 {day_name} {time} — {count} чел.",
+                f"📅 {day_name} {date} {time} — {count} чел.",
                 callback_data=f"training_{day_key}"
             )])
     kb.append([InlineKeyboardButton("⚙️ Изменить расписание", callback_data="edit_schedule")])
@@ -373,13 +507,16 @@ async def show_training(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     day_key = query.data.replace("training_", "")
+    if "_" in day_key:
+        day_key = day_key.split("_")[0]
     data = load()
     day = data["schedule"].get(day_key, {})
-    week_key = _current_week_key()
-    signups = day.get("signups", {}).get(week_key, {})
+    wk = current_week_key()
+    signups = day.get("signups", {}).get(wk, {})
     day_name = DAY_NAMES.get(day_key, day_key)
     time = day.get("time", "")
-    text = f"📅 *{day_name} {time}*\n\n"
+    date = get_training_date(day_key)
+    text = f"📅 *{day_name} {date} {time}*\n\n"
     kb = []
     if not signups:
         text += "Никто не записался\n"
@@ -410,9 +547,100 @@ async def show_training(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("❌", callback_data=f"attend_no_{day_key}_{uname}"),
                     InlineKeyboardButton("🚫", callback_data=f"attend_cancel_{day_key}_{uname}"),
                 ])
+    kb.append([InlineKeyboardButton("✏️ Редактировать тренировку", callback_data=f"edit_training_{day_key}")])
     kb.append([InlineKeyboardButton("➕ Записать клиента", callback_data=f"training_addsignup_{day_key}")])
     kb.append([InlineKeyboardButton("◀️ Назад", callback_data="menu_schedule")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def edit_training(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    day_key = query.data.replace("edit_training_", "")
+    data = load()
+    wk = current_week_key()
+    signups = data["schedule"].get(day_key, {}).get("signups", {}).get(wk, {})
+    day_name = DAY_NAMES.get(day_key, day_key)
+    date = get_training_date(day_key)
+    kb = []
+    for uname, info in signups.items():
+        client = data["clients"].get(uname)
+        name = client["name"] if client else uname
+        status = info.get("status", "signed")
+        if status == "attended": icon = "✅"
+        elif status == "missed": icon = "❌"
+        elif status == "cancelled": icon = "🚫"
+        else: icon = "🔲"
+        kb.append([InlineKeyboardButton(
+            f"{icon} {name} @{uname}",
+            callback_data=f"editstatus_{day_key}_{uname}"
+        )])
+    kb.append([InlineKeyboardButton("◀️ Назад", callback_data=f"training_{day_key}")])
+    await query.edit_message_text(
+        f"✏️ *Редактировать тренировку*\n{day_name} {date}\n\nВыбери клиента:",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode="Markdown"
+    )
+
+async def edit_status_choose(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.replace("editstatus_", "").split("_")
+    day_key = parts[0]
+    uname = parts[1]
+    context.user_data["editstatus_day"] = day_key
+    context.user_data["editstatus_uname"] = uname
+    data = load()
+    client = data["clients"].get(uname)
+    name = client["name"] if client else uname
+    wk = current_week_key()
+    current = data["schedule"][day_key]["signups"][wk][uname].get("status", "signed")
+    icons = {"attended": "✅ Пришла", "missed": "❌ Не пришла", "cancelled": "🚫 Отменила", "signed": "🔲 Записана"}
+    kb = [
+        [InlineKeyboardButton("✅ Пришла", callback_data="setstatus_attended")],
+        [InlineKeyboardButton("❌ Не пришла", callback_data="setstatus_missed")],
+        [InlineKeyboardButton("🚫 Отменила", callback_data="setstatus_cancelled")],
+        [InlineKeyboardButton("◀️ Назад", callback_data=f"edit_training_{day_key}")],
+    ]
+    await query.edit_message_text(
+        f"Изменить статус *{name}*?\nСейчас: {icons.get(current, current)}",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode="Markdown"
+    )
+
+async def set_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    new_status = query.data.replace("setstatus_", "")
+    day_key = context.user_data["editstatus_day"]
+    uname = context.user_data["editstatus_uname"]
+    data = load()
+    wk = current_week_key()
+    old_status = data["schedule"][day_key]["signups"][wk][uname].get("status", "signed")
+    client = data["clients"].get(uname)
+    if client and client.get("subscriptions"):
+        all_subs = client["subscriptions"]
+        last_sub_idx = len(all_subs) - 1
+        if old_status in ["attended", "missed"] and new_status in ["cancelled", "signed"]:
+            if last_sub_idx >= 0:
+                data["clients"][uname]["subscriptions"][last_sub_idx]["sessions_left"] += 1
+            data["sessions_log"] = [
+                s for s in data.get("sessions_log", [])
+                if not (s["username"] == uname and s["day"] == day_key and s["date"] == today_str())
+            ]
+        elif old_status in ["cancelled", "signed"] and new_status in ["attended", "missed"]:
+            sub = get_active_sub(client)
+            if sub:
+                idx = next(i for i, s in enumerate(client["subscriptions"]) if s is sub)
+                if not data["clients"][uname]["subscriptions"][idx]["start_date"]:
+                    data["clients"][uname]["subscriptions"][idx]["start_date"] = today_str()
+                    end = datetime.now() + timedelta(days=30)
+                    data["clients"][uname]["subscriptions"][idx]["end_date"] = end.strftime("%d.%m.%Y")
+                data["clients"][uname]["subscriptions"][idx]["sessions_left"] -= 1
+                data["sessions_log"].append({"date": today_str(), "username": uname, "day": day_key})
+    data["schedule"][day_key]["signups"][wk][uname]["status"] = new_status
+    save(data)
+    query.data = f"training_{day_key}"
+    await show_training(update, context)
 
 async def attend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -422,7 +650,7 @@ async def attend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     day_key = parts[2]
     uname = parts[3]
     data = load()
-    week_key = _current_week_key()
+    wk = current_week_key()
     client = data["clients"].get(uname)
     if action == "yes":
         sub = get_active_sub(client) if client else None
@@ -441,7 +669,7 @@ async def attend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return TAKE_PAYMENT_PACKAGE
         else:
-            data["schedule"][day_key]["signups"][week_key][uname]["status"] = "attended"
+            data["schedule"][day_key]["signups"][wk][uname]["status"] = "attended"
             if sub:
                 sub_idx = next(i for i, s in enumerate(client["subscriptions"]) if s is sub)
                 if not data["clients"][uname]["subscriptions"][sub_idx]["start_date"]:
@@ -451,7 +679,7 @@ async def attend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data["clients"][uname]["subscriptions"][sub_idx]["sessions_left"] -= 1
             data["sessions_log"].append({"date": today_str(), "username": uname, "day": day_key})
     elif action == "no":
-        data["schedule"][day_key]["signups"][week_key][uname]["status"] = "missed"
+        data["schedule"][day_key]["signups"][wk][uname]["status"] = "missed"
         if client:
             sub = get_active_sub(client)
             if sub:
@@ -461,8 +689,9 @@ async def attend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     end = datetime.now() + timedelta(days=30)
                     data["clients"][uname]["subscriptions"][sub_idx]["end_date"] = end.strftime("%d.%m.%Y")
                 data["clients"][uname]["subscriptions"][sub_idx]["sessions_left"] -= 1
+        data["sessions_log"].append({"date": today_str(), "username": uname, "day": day_key})
     elif action == "cancel":
-        data["schedule"][day_key]["signups"][week_key][uname]["status"] = "cancelled"
+        data["schedule"][day_key]["signups"][wk][uname]["status"] = "cancelled"
     save(data)
     query.data = f"training_{day_key}"
     await show_training(update, context)
@@ -502,7 +731,7 @@ async def save_take_payment(msg_or_query, context):
     pay = context.user_data["take_payment_pay"]
     pkg = PACKAGES[pkg_key]
     data = load()
-    week_key = _current_week_key()
+    wk = current_week_key()
     subscription = {
         "package_key": pkg_key,
         "package_name": pkg["name"],
@@ -516,7 +745,7 @@ async def save_take_payment(msg_or_query, context):
         "added_date": today_str()
     }
     data["clients"][uname]["subscriptions"].append(subscription)
-    data["schedule"][day_key]["signups"][week_key][uname]["status"] = "attended"
+    data["schedule"][day_key]["signups"][wk][uname]["status"] = "attended"
     data["sessions_log"].append({"date": today_str(), "username": uname, "day": day_key})
     save(data)
     text = f"✅ Оплата принята! Абонемент *{pkg['name']}* добавлен @{uname}. Занятие списано."
@@ -544,8 +773,8 @@ async def training_existing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     day_key = query.data.replace("training_existing_", "")
     data = load()
-    week_key = _current_week_key()
-    already = data["schedule"].get(day_key, {}).get("signups", {}).get(week_key, {})
+    wk = current_week_key()
+    already = data["schedule"].get(day_key, {}).get("signups", {}).get(wk, {})
     kb = []
     for uname, c in data["clients"].items():
         if uname not in already:
@@ -563,10 +792,10 @@ async def do_signup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     day_key = parts[0]
     uname = parts[1]
     data = load()
-    week_key = _current_week_key()
-    if week_key not in data["schedule"][day_key].get("signups", {}):
-        data["schedule"][day_key]["signups"][week_key] = {}
-    data["schedule"][day_key]["signups"][week_key][uname] = {"status": "signed"}
+    wk = current_week_key()
+    if wk not in data["schedule"][day_key].get("signups", {}):
+        data["schedule"][day_key]["signups"][wk] = {}
+    data["schedule"][day_key]["signups"][wk][uname] = {"status": "signed"}
     save(data)
     query.data = f"training_{day_key}"
     await show_training(update, context)
@@ -597,11 +826,10 @@ async def show_finance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await query.edit_message_text("💰 *Бухгалтерия*", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
-def _get_period(context):
+def get_period(context):
     if context.user_data.get("custom_period"):
         return context.user_data["period_from"], context.user_data["period_to"]
     now = datetime.now()
-    from calendar import monthrange
     start = datetime(now.year, now.month, 1)
     end = datetime(now.year, now.month, monthrange(now.year, now.month)[1], 23, 59, 59)
     return start, end
@@ -612,7 +840,7 @@ async def show_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "current" in query.data:
         context.user_data.pop("custom_period", None)
     data = load()
-    start, end = _get_period(context)
+    start, end = get_period(context)
     expenses = [e for e in data["expenses"]
                 if start <= datetime.strptime(e["date"], "%d.%m.%Y") <= end]
     total = sum(e["amount"] for e in expenses)
@@ -638,7 +866,7 @@ async def show_profit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "current" in query.data:
         context.user_data.pop("custom_period", None)
     data = load()
-    start, end = _get_period(context)
+    start, end = get_period(context)
     revenue = 0
     for c in data["clients"].values():
         for sub in c.get("subscriptions", []):
@@ -676,7 +904,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "current" in query.data:
         context.user_data.pop("custom_period", None)
     data = load()
-    start, end = _get_period(context)
+    start, end = get_period(context)
     count_1 = count_4 = count_8 = 0
     for c in data["clients"].values():
         for sub in c.get("subscriptions", []):
@@ -698,9 +926,9 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     unique_clients = len(set(s["username"] for s in visits))
     trainings_in_period = 0
     for day_key, day in data["schedule"].items():
-        for week_key, signups in day.get("signups", {}).items():
+        for wk, signups in day.get("signups", {}).items():
             try:
-                wdate = datetime.strptime(week_key, "%d.%m.%Y")
+                wdate = datetime.strptime(wk, "%d.%m.%Y")
                 if start <= wdate <= end:
                     attended = sum(1 for v in signups.values() if v.get("status") == "attended")
                     if attended > 0:
@@ -781,14 +1009,14 @@ async def group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         day_key = next_training_day()
     data = load()
-    week_key = _current_week_key()
+    wk = current_week_key()
     if day_key not in data["schedule"]:
         return
-    if week_key not in data["schedule"][day_key].get("signups", {}):
-        data["schedule"][day_key]["signups"][week_key] = {}
-    if username in data["schedule"][day_key]["signups"][week_key]:
+    if wk not in data["schedule"][day_key].get("signups", {}):
+        data["schedule"][day_key]["signups"][wk] = {}
+    if username in data["schedule"][day_key]["signups"][wk]:
         return
-    data["schedule"][day_key]["signups"][week_key][username] = {"status": "signed"}
+    data["schedule"][day_key]["signups"][wk][username] = {"status": "signed"}
     if username not in data["clients"]:
         data["clients"][username] = {
             "name": msg.from_user.first_name or username,
@@ -799,8 +1027,9 @@ async def group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
     save(data)
     day_name = DAY_NAMES.get(day_key, day_key)
+    date = get_training_date(day_key)
     time = data["schedule"][day_key]["time"]
-    await msg.reply_text(f"✅ @{username}, записала тебя на {day_name} в {time}!")
+    await msg.reply_text(f"✅ @{username}, записала тебя на {day_name} {date} в {time}!")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
@@ -834,6 +1063,16 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
         per_message=False,
     )
+    edit_client_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(edit_client_menu, pattern="^edit_client_")],
+        states={
+            EDIT_CLIENT_FIELD: [CallbackQueryHandler(edit_field_start, pattern="^editfield_")],
+            EDIT_CLIENT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_client_value)],
+            EDIT_SUB_FIELD: [CallbackQueryHandler(edit_sub_field, pattern="^editval_")],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=False,
+    )
     add_expense_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_expense_start, pattern="^add_expense$")],
         states={
@@ -857,14 +1096,18 @@ def main():
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(add_client_conv)
     app.add_handler(add_sub_conv)
+    app.add_handler(edit_client_conv)
     app.add_handler(add_expense_conv)
     app.add_handler(take_payment_conv)
     app.add_handler(CallbackQueryHandler(start, pattern="^main_menu$"))
     app.add_handler(CallbackQueryHandler(show_clients, pattern="^menu_clients$"))
     app.add_handler(CallbackQueryHandler(view_client, pattern="^client_view_"))
     app.add_handler(CallbackQueryHandler(show_schedule, pattern="^menu_schedule$"))
-    app.add_handler(CallbackQueryHandler(show_training, pattern="^training_[a-z]+$"))
+    app.add_handler(CallbackQueryHandler(show_training, pattern="^training_(tuesday|thursday)$"))
     app.add_handler(CallbackQueryHandler(attend_handler, pattern="^attend_"))
+    app.add_handler(CallbackQueryHandler(edit_training, pattern="^edit_training_"))
+    app.add_handler(CallbackQueryHandler(edit_status_choose, pattern="^editstatus_"))
+    app.add_handler(CallbackQueryHandler(set_status, pattern="^setstatus_"))
     app.add_handler(CallbackQueryHandler(training_addsignup, pattern="^training_addsignup_"))
     app.add_handler(CallbackQueryHandler(training_existing, pattern="^training_existing_"))
     app.add_handler(CallbackQueryHandler(do_signup, pattern="^dosignup_"))
@@ -881,3 +1124,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
