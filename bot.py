@@ -1071,7 +1071,7 @@ def main():
             EDIT_SUB_FIELD: [CallbackQueryHandler(edit_sub_field, pattern="^editval_")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False,
+        per_message=False,allow_reentry=True,
     )
     add_expense_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_expense_start, pattern="^add_expense$")],
@@ -1080,7 +1080,7 @@ def main():
             ADD_EXPENSE_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_expense_category)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False,
+        per_message=False,allow_reentry=True,
     )
     take_payment_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(take_payment_package, pattern="^takepkg_")],
