@@ -1090,7 +1090,7 @@ def main():
             TAKE_PAYMENT_RECEIPT: [MessageHandler(filters.PHOTO | filters.TEXT, take_payment_receipt)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False,
+        per_message=False,allow_reentry=True,
     )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
