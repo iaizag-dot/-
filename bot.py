@@ -1051,7 +1051,7 @@ def main():
             ADD_CLIENT_RECEIPT: [MessageHandler(filters.PHOTO | filters.TEXT, add_client_receipt)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False,
+        per_message=False, allow_reentry=true,
     )
     add_sub_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(addsub_start, pattern="^addsub_")],
@@ -1117,8 +1117,7 @@ def main():
     app.add_handler(CallbackQueryHandler(show_profit, pattern="^finance_profit$|^profit_current$"))
     app.add_handler(CallbackQueryHandler(show_stats, pattern="^finance_stats$|^stats_current$"))
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
-        group_message
+        filters.TEXT & ~filters.COMMAND 
     ))
     app.run_polling()
 
