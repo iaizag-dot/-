@@ -1061,7 +1061,7 @@ def main():
             ADD_SUB_RECEIPT: [MessageHandler(filters.PHOTO | filters.TEXT, addsub_receipt)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False,
+        per_message=False,allow_reentry=True
     )
     edit_client_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(edit_client_menu, pattern="^edit_client_")],
