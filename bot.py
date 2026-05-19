@@ -352,7 +352,10 @@ async def add_client_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     pay = query.data.replace("pay_", "")
     context.user_data["adding_client"]["payment"] = pay
     if pay == "transfer":
-        await query.edit_message_text("📎 Прикрепи *фото чека*:", parse_mode="Markdown")
+        await query.edit_message_text(
+            "📎 Прикрепи *фото чека* или напиши *ок* если нет фото:",
+            parse_mode="Markdown"
+        )
         return ADD_CLIENT_RECEIPT
     else:
         return await save_new_client(query, context)
@@ -360,6 +363,8 @@ async def add_client_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def add_client_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         context.user_data["adding_client"]["receipt_file_id"] = update.message.photo[-1].file_id
+    else:
+        context.user_data["adding_client"]["receipt_file_id"] = None
     return await save_new_client(update.message, context)
 
 async def save_new_client(msg_or_query, context):
@@ -443,7 +448,10 @@ async def addsub_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pay = query.data.replace("subpay_", "")
     context.user_data["addsub_payment"] = pay
     if pay == "transfer":
-        await query.edit_message_text("📎 Прикрепи *фото чека*:", parse_mode="Markdown")
+        await query.edit_message_text(
+            "📎 Прикрепи *фото чека* или напиши *ок* если нет фото:",
+            parse_mode="Markdown"
+        )
         return ADD_SUB_RECEIPT
     else:
         return await save_subscription(query, context)
@@ -451,6 +459,8 @@ async def addsub_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def addsub_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         context.user_data["addsub_receipt"] = update.message.photo[-1].file_id
+    else:
+        context.user_data["addsub_receipt"] = None
     return await save_subscription(update.message, context)
 
 async def save_subscription(msg_or_query, context):
@@ -714,7 +724,10 @@ async def take_payment_method(update: Update, context: ContextTypes.DEFAULT_TYPE
     pay = query.data.replace("takepay_", "")
     context.user_data["take_payment_pay"] = pay
     if pay == "transfer":
-        await query.edit_message_text("📎 Прикрепи *фото чека*:", parse_mode="Markdown")
+        await query.edit_message_text(
+            "📎 Прикрепи *фото чека* или напиши *ок* если нет фото:",
+            parse_mode="Markdown"
+        )
         return TAKE_PAYMENT_RECEIPT
     else:
         return await save_take_payment(query, context)
@@ -722,6 +735,8 @@ async def take_payment_method(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def take_payment_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
         context.user_data["take_payment_receipt"] = update.message.photo[-1].file_id
+    else:
+        context.user_data["take_payment_receipt"] = None
     return await save_take_payment(update.message, context)
 
 async def save_take_payment(msg_or_query, context):
@@ -1049,7 +1064,7 @@ def main():
             ADD_CLIENT_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_client_username)],
             ADD_CLIENT_PACKAGE: [CallbackQueryHandler(add_client_package, pattern="^pkg_")],
             ADD_CLIENT_PAYMENT: [CallbackQueryHandler(add_client_payment, pattern="^pay_")],
-            ADD_CLIENT_RECEIPT: [MessageHandler(filters.PHOTO | filters.TEXT, add_client_receipt)],
+            ADD_CLIENT_RECEIPT: [MessageHandler(filters.PHOTO | (filters.TEXT & ~filters.COMMAND), add_client_receipt)],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
         per_message=False,
@@ -1061,7 +1076,7 @@ def main():
         states={
             ADD_SUB_PACKAGE: [CallbackQueryHandler(addsub_package, pattern="^subpkg_")],
             ADD_SUB_PAYMENT: [CallbackQueryHandler(addsub_payment, pattern="^subpay_")],
-            ADD_SUB_RECEIPT: [MessageHandler(filters.PHOTO | filters.TEXT, addsub_receipt)],
+            ADD_SUB_RECEIPT: [MessageHandler(filters.PHOTO | (filters.TEXT & ~filters.COMMAND), addsub_receipt)],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
         per_message=False,
@@ -1096,7 +1111,7 @@ def main():
         states={
             TAKE_PAYMENT_PACKAGE: [CallbackQueryHandler(take_payment_package, pattern="^takepkg_")],
             TAKE_PAYMENT_METHOD: [CallbackQueryHandler(take_payment_method, pattern="^takepay_")],
-            TAKE_PAYMENT_RECEIPT: [MessageHandler(filters.PHOTO | filters.TEXT, take_payment_receipt)],
+            TAKE_PAYMENT_RECEIPT: [MessageHandler(filters.PHOTO | (filters.TEXT & ~filters.COMMAND), take_payment_receipt)],
         },
         fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
         per_message=False,
