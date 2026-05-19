@@ -1,4 +1,4 @@
-import os  
+import os
 import json
 import logging
 from datetime import datetime, timedelta
@@ -205,13 +205,13 @@ async def edit_client_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(kb),
         parse_mode="Markdown"
     )
+    return EDIT_CLIENT_FIELD
 
 async def edit_field_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     field = query.data.replace("editfield_", "")
     context.user_data["edit_field"] = field
-    uname = context.user_data["edit_uname"]
     if field == "package":
         kb = [
             [InlineKeyboardButton("1️⃣ Разовое — 30₾", callback_data="editval_pkg_1")],
@@ -1038,6 +1038,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(TOKEN).build()
+
     add_client_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(add_client_start, pattern="^client_add$"),
@@ -1050,9 +1051,11 @@ def main():
             ADD_CLIENT_PAYMENT: [CallbackQueryHandler(add_client_payment, pattern="^pay_")],
             ADD_CLIENT_RECEIPT: [MessageHandler(filters.PHOTO | filters.TEXT, add_client_receipt)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False, allow_reentry=True,
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
+        per_message=False,
+        allow_reentry=True,
     )
+
     add_sub_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(addsub_start, pattern="^addsub_")],
         states={
@@ -1060,9 +1063,11 @@ def main():
             ADD_SUB_PAYMENT: [CallbackQueryHandler(addsub_payment, pattern="^subpay_")],
             ADD_SUB_RECEIPT: [MessageHandler(filters.PHOTO | filters.TEXT, addsub_receipt)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False,allow_reentry=True
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
+        per_message=False,
+        allow_reentry=True,
     )
+
     edit_client_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(edit_client_menu, pattern="^edit_client_")],
         states={
@@ -1070,18 +1075,22 @@ def main():
             EDIT_CLIENT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_client_value)],
             EDIT_SUB_FIELD: [CallbackQueryHandler(edit_sub_field, pattern="^editval_")],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False,allow_reentry=True,
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
+        per_message=False,
+        allow_reentry=True,
     )
+
     add_expense_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_expense_start, pattern="^add_expense$")],
         states={
             ADD_EXPENSE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_expense_amount)],
             ADD_EXPENSE_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_expense_category)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False,allow_reentry=True,
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
+        per_message=False,
+        allow_reentry=True,
     )
+
     take_payment_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(take_payment_package, pattern="^takepkg_")],
         states={
@@ -1089,9 +1098,11 @@ def main():
             TAKE_PAYMENT_METHOD: [CallbackQueryHandler(take_payment_method, pattern="^takepay_")],
             TAKE_PAYMENT_RECEIPT: [MessageHandler(filters.PHOTO | filters.TEXT, take_payment_receipt)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False,allow_reentry=True,
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
+        per_message=False,
+        allow_reentry=True,
     )
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(add_client_conv)
@@ -1117,11 +1128,10 @@ def main():
     app.add_handler(CallbackQueryHandler(show_profit, pattern="^finance_profit$|^profit_current$"))
     app.add_handler(CallbackQueryHandler(show_stats, pattern="^finance_stats$|^stats_current$"))
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND 
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+        group_message
     ))
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-
-
